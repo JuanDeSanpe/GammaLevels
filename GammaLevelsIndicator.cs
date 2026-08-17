@@ -16,9 +16,23 @@ using System.Xml.Serialization;
 using System.IO;
 using NinjaTrader.NinjaScript.DrawingTools;
 using System.Linq;
+using NinjaTrader.NinjaScript.Indicators;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
+    public enum RatioCalculationMode
+    {
+        Fixed,
+        Smoothed
+    }
+
+    public enum GammaDisplayMode
+    {
+        Both,
+        Only0DTE,
+        OnlyMacro
+    }
+
     public class GammaLevelsIndicator : Indicator
     {
         private System.Threading.Timer refreshTimer;
@@ -35,6 +49,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double lastCallMacro = 0;
         private double lastPutMacro = 0;
         private double lastFlipMacro = 0;
+        private bool needsRedraw = false;
+        private double savedRatio = 0;
+        private string label0DTE = "";
+        private bool isTimerStarted = false;
 
         [NinjaScriptProperty]
         [Display(Name="File Name", Description="Name of the CSV file in Archivos Cadena de Opciones folder", Order=1, GroupName="Parameters")]
@@ -78,6 +96,14 @@ namespace NinjaTrader.NinjaScript.Indicators
             set { GammaFlipColor = Serialize.StringToBrush(value); }
         }
 
+        [NinjaScriptProperty]
+        [Display(Name="Ratio Calculation Mode", Description="Fixed: Fija el ratio una vez. Smoothed: Ajuste dinámico suave.", Order=6, GroupName="Parameters")]
+        public RatioCalculationMode RatioMode { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name="Display Mode", Description="Mostrar 0DTE, Macro o ambos", Order=7, GroupName="Parameters")]
+        public GammaDisplayMode DisplayMode { get; set; }
+
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
@@ -99,6 +125,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 CallWallColor = Brushes.LimeGreen;
                 PutWallColor = Brushes.Red;
                 GammaFlipColor = Brushes.White;
+                RatioMode = RatioCalculationMode.Fixed;
+                DisplayMode = GammaDisplayMode.Both;
             }
             else if (State == State.Configure)
             {
@@ -108,7 +136,17 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 if (refreshTimer == null)
                 {
-                    refreshTimer = new System.Threading.Timer(TimerCallback, null, 0, RefreshInterval * 1000);
+                    // Inicializar parado (Infinite)
+                    refreshTimer = new System.Threading.Timer(TimerCallback, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+                }
+            }
+            else if (State == State.Realtime)
+            {
+                // Cuando NinjaTrader termina de cargar todo el historial, ¡dispara el timer al instante!
+                if (refreshTimer != null && !isTimerStarted)
+                {
+                    refreshTimer.Change(0, RefreshInterval * 1000);
+                    isTimerStarted = true;
                 }
             }
             else if (State == State.Terminated)
@@ -150,17 +188,30 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 if ((levels0DTE.IsValid || levelsMacro.IsValid) && parsedData.UnderlyingPrice > 0)
                 {
-                    double ratio = lastKnownNqPrice / parsedData.UnderlyingPrice;
-                    
+                    double currentRatio = lastKnownNqPrice / parsedData.UnderlyingPrice;
+                    double ratioToUse = currentRatio;
+
+                    if (RatioMode == RatioCalculationMode.Fixed)
+                    {
+                        if (savedRatio == 0) savedRatio = currentRatio;
+                        ratioToUse = savedRatio;
+                    }
+                    else if (RatioMode == RatioCalculationMode.Smoothed)
+                    {
+                        if (savedRatio == 0) savedRatio = currentRatio;
+                        else savedRatio = (savedRatio * 0.90) + (currentRatio * 0.10); // EMA (10% peso al nuevo precio)
+                        ratioToUse = savedRatio;
+                    }
+
                     // 0DTE
-                    double callWall0DTE_Nq = levels0DTE.CallWallStrike * ratio;
-                    double putWall0DTE_Nq = levels0DTE.PutWallStrike * ratio;
-                    double flip0DTE_Nq = levels0DTE.GammaFlipStrike * ratio;
+                    double callWall0DTE_Nq = levels0DTE.CallWallStrike * ratioToUse;
+                    double putWall0DTE_Nq = levels0DTE.PutWallStrike * ratioToUse;
+                    double flip0DTE_Nq = levels0DTE.GammaFlipStrike * ratioToUse;
 
                     // Macro
-                    double callWallMacro_Nq = levelsMacro.CallWallStrike * ratio;
-                    double putWallMacro_Nq = levelsMacro.PutWallStrike * ratio;
-                    double flipMacro_Nq = levelsMacro.GammaFlipStrike * ratio;
+                    double callWallMacro_Nq = levelsMacro.CallWallStrike * ratioToUse;
+                    double putWallMacro_Nq = levelsMacro.PutWallStrike * ratioToUse;
+                    double flipMacro_Nq = levelsMacro.GammaFlipStrike * ratioToUse;
 
                     if (ChartControl != null && ChartControl.Dispatcher != null)
                     {
@@ -174,26 +225,16 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 lastCallMacro = callWallMacro_Nq;
                                 lastPutMacro = putWallMacro_Nq;
                                 lastFlipMacro = flipMacro_Nq;
+                                label0DTE = validStrikes.Count > 0 ? validStrikes.Min(s => s.ExpirationDate).ToString("dd/MMM") : "0DTE";
+                                needsRedraw = true;
 
-                                string regime0DTEText = levels0DTE.TotalNetGex > 0 ? "0DTE: POSITIVO (Baja Vol)" : "0DTE: NEGATIVO (Alta Vol)";
-                                string regimeMacroText = levelsMacro.TotalNetGex > 0 ? "MACRO: POSITIVO (Baja Vol)" : "MACRO: NEGATIVO (Alta Vol)";
+                                string hudText = "";
+                                if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.OnlyMacro)
+                                    hudText += "MACRO: " + (levelsMacro.TotalNetGex > 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)") + "\n";
+                                if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.Only0DTE)
+                                    hudText += "0DTE: " + (levels0DTE.TotalNetGex > 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)");
                                 
-                                Brush hudColor = levels0DTE.TotalNetGex > 0 ? Brushes.LimeGreen : Brushes.Red;
-                                string hudText = string.Format(
-                                    "--- DEBUG ---\nUnderlying: {0}\nRatio: {1:F2}\nNQ Price: {2:F2}\n\n--- MACRO Strikes ---\nCallWall: {3} -> NQ: {4:F2}\nPutWall: {5} -> NQ: {6:F2}\nFlip: {7} -> NQ: {8:F2}\nGEX: {9:N0} {10}\n\n--- 0DTE Strikes ---\nCallWall: {11} -> NQ: {12:F2}\nPutWall: {13} -> NQ: {14:F2}\nFlip: {15} -> NQ: {16:F2}\nGEX: {17:N0} {18}\n\n--- DRAW STATE ---\nlastCallMacro: {19:F2}\nlastPutMacro: {20:F2}\nlastFlipMacro: {21:F2}\nsessionStart: {22}",
-                                    parsedData.UnderlyingPrice, ratio, lastKnownNqPrice,
-                                    levelsMacro.CallWallStrike, callWallMacro_Nq,
-                                    levelsMacro.PutWallStrike, putWallMacro_Nq,
-                                    levelsMacro.GammaFlipStrike, flipMacro_Nq,
-                                    levelsMacro.TotalNetGex, regimeMacroText,
-                                    levels0DTE.CallWallStrike, callWall0DTE_Nq,
-                                    levels0DTE.PutWallStrike, putWall0DTE_Nq,
-                                    levels0DTE.GammaFlipStrike, flip0DTE_Nq,
-                                    levels0DTE.TotalNetGex, regime0DTEText,
-                                    lastCallMacro, lastPutMacro, lastFlipMacro,
-                                    sessionStartTime.ToString("yyyy-MM-dd HH:mm"));
-                                
-                                Draw.TextFixed(this, "GammaHUD", hudText, TextPosition.TopRight, hudColor, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+                                Draw.TextFixed(this, "GammaHUD", hudText.Trim(), TextPosition.TopRight, Brushes.LightGray, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
 
                                 ForceRefresh();
                             }
@@ -224,17 +265,61 @@ namespace NinjaTrader.NinjaScript.Indicators
                 sessionStartTime = Time[0].Date;
                 
             // Dibujamos las lineas desde OnBarUpdate (hilo nativo de NinjaTrader)
-            if (sessionStartTime != DateTime.MinValue)
+            if (needsRedraw && sessionStartTime != DateTime.MinValue)
             {
                 DateTime futureTime = lastKnownTime.AddDays(5);
                 
-                if (lastCall0DTE > 0) Draw.Line(this, "CallWall_0DTE_Live", false, sessionStartTime, lastCall0DTE, futureTime, lastCall0DTE, CallWallColor, DashStyleHelper.Dash, 2);
-                if (lastPut0DTE > 0) Draw.Line(this, "PutWall_0DTE_Live", false, sessionStartTime, lastPut0DTE, futureTime, lastPut0DTE, PutWallColor, DashStyleHelper.Dash, 2);
-                if (lastFlip0DTE > 0) Draw.Line(this, "GammaFlip_0DTE_Live", false, sessionStartTime, lastFlip0DTE, futureTime, lastFlip0DTE, GammaFlipColor, DashStyleHelper.Dash, 2);
+                // 0DTE
+                if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.Only0DTE)
+                {
+                    if (lastCall0DTE > 0) { 
+                        Draw.Line(this, "CallWall_0DTE_Live", false, sessionStartTime, lastCall0DTE, futureTime, lastCall0DTE, CallWallColor, DashStyleHelper.Dash, 2); 
+                        var t1 = Draw.Text(this, "Txt_Call_0DTE", "Call 0DTE (" + label0DTE + ")", -10, lastCall0DTE + 10, CallWallColor); 
+                        if (t1 != null) t1.Font = new Gui.Tools.SimpleFont("Arial", 10);
+                    }
+                    if (lastPut0DTE > 0) { 
+                        Draw.Line(this, "PutWall_0DTE_Live", false, sessionStartTime, lastPut0DTE, futureTime, lastPut0DTE, PutWallColor, DashStyleHelper.Dash, 2); 
+                        var t2 = Draw.Text(this, "Txt_Put_0DTE", "Put 0DTE (" + label0DTE + ")", -10, lastPut0DTE - 10, PutWallColor); 
+                        if (t2 != null) t2.Font = new Gui.Tools.SimpleFont("Arial", 10);
+                    }
+                    if (lastFlip0DTE > 0) { 
+                        Draw.Line(this, "GammaFlip_0DTE_Live", false, sessionStartTime, lastFlip0DTE, futureTime, lastFlip0DTE, GammaFlipColor, DashStyleHelper.Dash, 2); 
+                        var t3 = Draw.Text(this, "Txt_Flip_0DTE", "Flip 0DTE (" + label0DTE + ")", -10, lastFlip0DTE + 10, GammaFlipColor); 
+                        if (t3 != null) t3.Font = new Gui.Tools.SimpleFont("Arial", 10);
+                    }
+                }
+                else
+                {
+                    RemoveDrawObject("CallWall_0DTE_Live"); RemoveDrawObject("PutWall_0DTE_Live"); RemoveDrawObject("GammaFlip_0DTE_Live");
+                    RemoveDrawObject("Txt_Call_0DTE"); RemoveDrawObject("Txt_Put_0DTE"); RemoveDrawObject("Txt_Flip_0DTE");
+                }
 
-                if (lastCallMacro > 0) Draw.Line(this, "CallWall_Macro_Live", false, sessionStartTime, lastCallMacro, futureTime, lastCallMacro, CallWallColor, DashStyleHelper.Solid, 4);
-                if (lastPutMacro > 0) Draw.Line(this, "PutWall_Macro_Live", false, sessionStartTime, lastPutMacro, futureTime, lastPutMacro, PutWallColor, DashStyleHelper.Solid, 4);
-                if (lastFlipMacro > 0) Draw.Line(this, "GammaFlip_Macro_Live", false, sessionStartTime, lastFlipMacro, futureTime, lastFlipMacro, GammaFlipColor, DashStyleHelper.Solid, 4);
+                // MACRO
+                if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.OnlyMacro)
+                {
+                    if (lastCallMacro > 0) { 
+                        Draw.Line(this, "CallWall_Macro_Live", false, sessionStartTime, lastCallMacro, futureTime, lastCallMacro, CallWallColor, DashStyleHelper.Solid, 4); 
+                        var t4 = Draw.Text(this, "Txt_Call_Macro", "Call MACRO", -10, lastCallMacro + 25, CallWallColor); 
+                        if (t4 != null) t4.Font = new Gui.Tools.SimpleFont("Arial", 10);
+                    }
+                    if (lastPutMacro > 0) { 
+                        Draw.Line(this, "PutWall_Macro_Live", false, sessionStartTime, lastPutMacro, futureTime, lastPutMacro, PutWallColor, DashStyleHelper.Solid, 4); 
+                        var t5 = Draw.Text(this, "Txt_Put_Macro", "Put MACRO", -10, lastPutMacro - 25, PutWallColor); 
+                        if (t5 != null) t5.Font = new Gui.Tools.SimpleFont("Arial", 10);
+                    }
+                    if (lastFlipMacro > 0) { 
+                        Draw.Line(this, "GammaFlip_Macro_Live", false, sessionStartTime, lastFlipMacro, futureTime, lastFlipMacro, GammaFlipColor, DashStyleHelper.Solid, 4); 
+                        var t6 = Draw.Text(this, "Txt_Flip_Macro", "Flip MACRO", -10, lastFlipMacro + 25, GammaFlipColor); 
+                        if (t6 != null) t6.Font = new Gui.Tools.SimpleFont("Arial", 10);
+                    }
+                }
+                else
+                {
+                    RemoveDrawObject("CallWall_Macro_Live"); RemoveDrawObject("PutWall_Macro_Live"); RemoveDrawObject("GammaFlip_Macro_Live");
+                    RemoveDrawObject("Txt_Call_Macro"); RemoveDrawObject("Txt_Put_Macro"); RemoveDrawObject("Txt_Flip_Macro");
+                }
+                
+                needsRedraw = false;
             }
         }
     }
@@ -247,18 +332,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private GammaLevelsIndicator[] cacheGammaLevelsIndicator;
-		public GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval)
+		public GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
 		{
-			return GammaLevelsIndicator(Input, fileName, refreshInterval);
+			return GammaLevelsIndicator(Input, fileName, refreshInterval, ratioMode, displayMode);
 		}
 
-		public GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input, string fileName, int refreshInterval)
+		public GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input, string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
 		{
 			if (cacheGammaLevelsIndicator != null)
 				for (int idx = 0; idx < cacheGammaLevelsIndicator.Length; idx++)
-					if (cacheGammaLevelsIndicator[idx] != null && cacheGammaLevelsIndicator[idx].FileName == fileName && cacheGammaLevelsIndicator[idx].RefreshInterval == refreshInterval && cacheGammaLevelsIndicator[idx].EqualsInput(input))
+					if (cacheGammaLevelsIndicator[idx] != null && cacheGammaLevelsIndicator[idx].FileName == fileName && cacheGammaLevelsIndicator[idx].RefreshInterval == refreshInterval && cacheGammaLevelsIndicator[idx].RatioMode == ratioMode && cacheGammaLevelsIndicator[idx].DisplayMode == displayMode && cacheGammaLevelsIndicator[idx].EqualsInput(input))
 						return cacheGammaLevelsIndicator[idx];
-			return CacheIndicator<GammaLevelsIndicator>(new GammaLevelsIndicator(){ FileName = fileName, RefreshInterval = refreshInterval }, input, ref cacheGammaLevelsIndicator);
+			return CacheIndicator<GammaLevelsIndicator>(new GammaLevelsIndicator(){ FileName = fileName, RefreshInterval = refreshInterval, RatioMode = ratioMode, DisplayMode = displayMode }, input, ref cacheGammaLevelsIndicator);
 		}
 	}
 }
@@ -267,14 +352,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval);
+			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval, ratioMode, displayMode);
 		}
 
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval);
+			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval, ratioMode, displayMode);
 		}
 	}
 }
@@ -283,14 +368,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval);
+			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval, ratioMode, displayMode);
 		}
 
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval);
+			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval, ratioMode, displayMode);
 		}
 	}
 }
