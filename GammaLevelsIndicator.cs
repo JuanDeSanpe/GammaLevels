@@ -141,6 +141,23 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 Draw.Line(this, "PutWall", false, sessionStartTime, putWallNq, futureTime, putWallNq, PutWallColor, DashStyleHelper.Solid, 2);
                                 Draw.Line(this, "GammaFlip", false, sessionStartTime, gammaFlipNq, futureTime, gammaFlipNq, GammaFlipColor, DashStyleHelper.Solid, 2);
                                 
+                                string regimeText;
+                                Brush regimeColor;
+                                
+                                if (levels.TotalNetGex > 0)
+                                {
+                                    regimeText = "Régimen GEX: POSITIVO\nEfecto: Fijación / Baja Volatilidad\nDealers: Buy the Dip / Sell the Rip";
+                                    regimeColor = Brushes.LimeGreen;
+                                }
+                                else
+                                {
+                                    regimeText = "Régimen GEX: NEGATIVO\nEfecto: Aceleración / Alta Volatilidad\nDealers: Vender en caídas / Comprar en subidas";
+                                    regimeColor = Brushes.Red;
+                                }
+                                
+                                string hudText = "Total Net GEX: " + levels.TotalNetGex.ToString("N0") + "\n" + regimeText;
+                                Draw.TextFixed(this, "GammaHUD", hudText, TextPosition.TopRight, regimeColor, new Gui.Tools.SimpleFont("Arial", 12) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+
                                 ForceRefresh();
                             }
                             catch (Exception drawEx)

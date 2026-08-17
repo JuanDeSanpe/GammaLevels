@@ -8,6 +8,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         public double CallWallStrike { get; set; }
         public double PutWallStrike { get; set; }
         public double GammaFlipStrike { get; set; }
+        public double TotalNetGex { get; set; }
         public bool IsValid { get; set; }
     }
 
@@ -22,6 +23,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             double maxCallGEX = double.MinValue;
             double minPutGEX = double.MaxValue; // Look for the most negative GEX
+            double totalNetGex = 0;
 
             // Dictionary to store NetGEX by Strike for Gamma Flip calculation
             var netGexByStrike = new Dictionary<double, double>();
@@ -33,6 +35,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 double putGEX = strike.PutGamma * strike.PutOpenInterest * 100 * -1; // Put GEX is negative
                 double netGEX = callGEX + putGEX;
 
+                totalNetGex += netGEX;
                 netGexByStrike[strike.Strike] = netGEX;
 
                 if (callGEX > maxCallGEX)
@@ -93,6 +96,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 }
             }
 
+            result.TotalNetGex = totalNetGex;
             result.GammaFlipStrike = gammaFlipStrike;
             result.IsValid = true;
 
