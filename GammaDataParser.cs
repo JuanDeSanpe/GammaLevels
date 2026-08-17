@@ -169,6 +169,26 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (logError != null) logError("GammaDataParser Error: " + ex.Message);
             }
 
+            // Auto-corrección de magnitud: El precio del subyacente DEBE tener la misma magnitud que los strikes.
+            // Si por culpa de los decimales de Excel el subyacente es 7316.89 y los strikes son 730, lo dividimos entre 10.
+            if (result.UnderlyingPrice > 0 && result.Strikes.Count > 0)
+            {
+                // Cogemos un strike cualquiera (el del medio de la cadena suele estar cerca del precio)
+                double sampleStrike = result.Strikes[result.Strikes.Count / 2].Strike;
+                
+                if (sampleStrike > 0)
+                {
+                    while (result.UnderlyingPrice > sampleStrike * 3)
+                    {
+                        result.UnderlyingPrice /= 10.0;
+                    }
+                    while (result.UnderlyingPrice < sampleStrike / 3)
+                    {
+                        result.UnderlyingPrice *= 10.0;
+                    }
+                }
+            }
+
             return result;
         }
     }

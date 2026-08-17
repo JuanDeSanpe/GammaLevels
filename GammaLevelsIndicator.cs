@@ -23,9 +23,18 @@ namespace NinjaTrader.NinjaScript.Indicators
     {
         private System.Threading.Timer refreshTimer;
         private string folderPath;
-        private double lastKnownNqPrice = 0;
-        private DateTime sessionStartTime;
+        private double lastKnownNqPrice;
         private DateTime lastKnownTime;
+        private DateTime sessionStartTime;
+        private DispatcherTimer timer;
+
+        // Variables para pasar datos del hilo secundario al OnBarUpdate
+        private double lastCall0DTE = 0;
+        private double lastPut0DTE = 0;
+        private double lastFlip0DTE = 0;
+        private double lastCallMacro = 0;
+        private double lastPutMacro = 0;
+        private double lastFlipMacro = 0;
 
         [NinjaScriptProperty]
         [Display(Name="File Name", Description="Name of the CSV file in Archivos Cadena de Opciones folder", Order=1, GroupName="Parameters")]
@@ -136,8 +145,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                     strikes0DTE = parsedData.Strikes;
                 }
 
-                var levels0DTE = GammaLevelsAnalyzer.Analyze(strikes0DTE);
-                var levelsMacro = GammaLevelsAnalyzer.Analyze(strikesMacro);
+                var levels0DTE = GammaLevelsAnalyzer.Analyze(strikes0DTE, parsedData.UnderlyingPrice);
+                var levelsMacro = GammaLevelsAnalyzer.Analyze(strikesMacro, parsedData.UnderlyingPrice);
 
                 if ((levels0DTE.IsValid || levelsMacro.IsValid) && parsedData.UnderlyingPrice > 0)
                 {
@@ -159,33 +168,32 @@ namespace NinjaTrader.NinjaScript.Indicators
                         {
                             try
                             {
-                                DateTime futureTime = lastKnownTime.AddDays(5);
-                                
-                                // 0DTE tags and drawing (Líneas finas punteadas)
-                                string call0DTETag = "CallWall_0DTE_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levels0DTE.CallWallStrike;
-                                string put0DTETag = "PutWall_0DTE_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levels0DTE.PutWallStrike;
-                                string flip0DTETag = "GammaFlip_0DTE_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levels0DTE.GammaFlipStrike;
+                                lastCall0DTE = callWall0DTE_Nq;
+                                lastPut0DTE = putWall0DTE_Nq;
+                                lastFlip0DTE = flip0DTE_Nq;
+                                lastCallMacro = callWallMacro_Nq;
+                                lastPutMacro = putWallMacro_Nq;
+                                lastFlipMacro = flipMacro_Nq;
 
-                                if (levels0DTE.CallWallStrike > 0) Draw.Line(this, call0DTETag, false, sessionStartTime, callWall0DTE_Nq, futureTime, callWall0DTE_Nq, CallWallColor, DashStyleHelper.Dash, 2);
-                                if (levels0DTE.PutWallStrike > 0) Draw.Line(this, put0DTETag, false, sessionStartTime, putWall0DTE_Nq, futureTime, putWall0DTE_Nq, PutWallColor, DashStyleHelper.Dash, 2);
-                                if (levels0DTE.GammaFlipStrike > 0) Draw.Line(this, flip0DTETag, false, sessionStartTime, flip0DTE_Nq, futureTime, flip0DTE_Nq, GammaFlipColor, DashStyleHelper.Dash, 2);
-
-                                // Macro tags and drawing (Líneas gruesas sólidas)
-                                string callMacroTag = "CallWall_Macro_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levelsMacro.CallWallStrike;
-                                string putMacroTag = "PutWall_Macro_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levelsMacro.PutWallStrike;
-                                string flipMacroTag = "GammaFlip_Macro_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levelsMacro.GammaFlipStrike;
-
-                                if (levelsMacro.CallWallStrike > 0) Draw.Line(this, callMacroTag, false, sessionStartTime, callWallMacro_Nq, futureTime, callWallMacro_Nq, CallWallColor, DashStyleHelper.Solid, 4);
-                                if (levelsMacro.PutWallStrike > 0) Draw.Line(this, putMacroTag, false, sessionStartTime, putWallMacro_Nq, futureTime, putWallMacro_Nq, PutWallColor, DashStyleHelper.Solid, 4);
-                                if (levelsMacro.GammaFlipStrike > 0) Draw.Line(this, flipMacroTag, false, sessionStartTime, flipMacro_Nq, futureTime, flipMacro_Nq, GammaFlipColor, DashStyleHelper.Solid, 4);
-
-                                string regime0DTEText = levels0DTE.TotalNetGex > 0 ? "0DTE Régimen: POSITIVO (Baja Volatilidad)" : "0DTE Régimen: NEGATIVO (Alta Volatilidad)";
-                                string regimeMacroText = levelsMacro.TotalNetGex > 0 ? "MACRO Régimen: POSITIVO (Baja Volatilidad)" : "MACRO Régimen: NEGATIVO (Alta Volatilidad)";
+                                string regime0DTEText = levels0DTE.TotalNetGex > 0 ? "0DTE: POSITIVO (Baja Vol)" : "0DTE: NEGATIVO (Alta Vol)";
+                                string regimeMacroText = levelsMacro.TotalNetGex > 0 ? "MACRO: POSITIVO (Baja Vol)" : "MACRO: NEGATIVO (Alta Vol)";
                                 
                                 Brush hudColor = levels0DTE.TotalNetGex > 0 ? Brushes.LimeGreen : Brushes.Red;
-                                string hudText = string.Format("--- DEBUG INFO ---\nUnderlying: {4}\nRatio: {5:F2}\nCallStrike: {6}\nPutStrike: {7}\n\n--- GEX MACRO ---\nNet GEX: {0:N0}\n{1}\n\n--- GEX 0DTE ---\nNet GEX: {2:N0}\n{3}", levelsMacro.TotalNetGex, regimeMacroText, levels0DTE.TotalNetGex, regime0DTEText, parsedData.UnderlyingPrice, ratio, levelsMacro.CallWallStrike, levelsMacro.PutWallStrike);
+                                string hudText = string.Format(
+                                    "--- DEBUG ---\nUnderlying: {0}\nRatio: {1:F2}\nNQ Price: {2:F2}\n\n--- MACRO Strikes ---\nCallWall: {3} -> NQ: {4:F2}\nPutWall: {5} -> NQ: {6:F2}\nFlip: {7} -> NQ: {8:F2}\nGEX: {9:N0} {10}\n\n--- 0DTE Strikes ---\nCallWall: {11} -> NQ: {12:F2}\nPutWall: {13} -> NQ: {14:F2}\nFlip: {15} -> NQ: {16:F2}\nGEX: {17:N0} {18}\n\n--- DRAW STATE ---\nlastCallMacro: {19:F2}\nlastPutMacro: {20:F2}\nlastFlipMacro: {21:F2}\nsessionStart: {22}",
+                                    parsedData.UnderlyingPrice, ratio, lastKnownNqPrice,
+                                    levelsMacro.CallWallStrike, callWallMacro_Nq,
+                                    levelsMacro.PutWallStrike, putWallMacro_Nq,
+                                    levelsMacro.GammaFlipStrike, flipMacro_Nq,
+                                    levelsMacro.TotalNetGex, regimeMacroText,
+                                    levels0DTE.CallWallStrike, callWall0DTE_Nq,
+                                    levels0DTE.PutWallStrike, putWall0DTE_Nq,
+                                    levels0DTE.GammaFlipStrike, flip0DTE_Nq,
+                                    levels0DTE.TotalNetGex, regime0DTEText,
+                                    lastCallMacro, lastPutMacro, lastFlipMacro,
+                                    sessionStartTime.ToString("yyyy-MM-dd HH:mm"));
                                 
-                                Draw.TextFixed(this, "GammaHUD", hudText, TextPosition.TopRight, hudColor, new Gui.Tools.SimpleFont("Arial", 12) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+                                Draw.TextFixed(this, "GammaHUD", hudText, TextPosition.TopRight, hudColor, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
 
                                 ForceRefresh();
                             }
@@ -205,20 +213,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         protected override void OnBarUpdate()
         {
-            if (CurrentBar >= 0)
-            {
-                lastKnownNqPrice = Close[0];
-                lastKnownTime = Time[0];
+            if (CurrentBar < 1) return;
+            
+            lastKnownNqPrice = Close[0];
+            lastKnownTime = Time[0];
+
+            if (Bars.IsFirstBarOfSession)
+                sessionStartTime = Time[0];
+            else if (sessionStartTime == DateTime.MinValue)
+                sessionStartTime = Time[0].Date;
                 
-                if (Bars.IsFirstBarOfSession)
-                {
-                    sessionStartTime = Time[0];
-                }
-                else if (sessionStartTime == DateTime.MinValue)
-                {
-                    // Fallback si el indicador se carga a mitad de sesión
-                    sessionStartTime = Time[0].Date;
-                }
+            // Dibujamos las lineas desde OnBarUpdate (hilo nativo de NinjaTrader)
+            if (sessionStartTime != DateTime.MinValue)
+            {
+                DateTime futureTime = lastKnownTime.AddDays(5);
+                
+                if (lastCall0DTE > 0) Draw.Line(this, "CallWall_0DTE_Live", false, sessionStartTime, lastCall0DTE, futureTime, lastCall0DTE, CallWallColor, DashStyleHelper.Dash, 2);
+                if (lastPut0DTE > 0) Draw.Line(this, "PutWall_0DTE_Live", false, sessionStartTime, lastPut0DTE, futureTime, lastPut0DTE, PutWallColor, DashStyleHelper.Dash, 2);
+                if (lastFlip0DTE > 0) Draw.Line(this, "GammaFlip_0DTE_Live", false, sessionStartTime, lastFlip0DTE, futureTime, lastFlip0DTE, GammaFlipColor, DashStyleHelper.Dash, 2);
+
+                if (lastCallMacro > 0) Draw.Line(this, "CallWall_Macro_Live", false, sessionStartTime, lastCallMacro, futureTime, lastCallMacro, CallWallColor, DashStyleHelper.Solid, 4);
+                if (lastPutMacro > 0) Draw.Line(this, "PutWall_Macro_Live", false, sessionStartTime, lastPutMacro, futureTime, lastPutMacro, PutWallColor, DashStyleHelper.Solid, 4);
+                if (lastFlipMacro > 0) Draw.Line(this, "GammaFlip_Macro_Live", false, sessionStartTime, lastFlipMacro, futureTime, lastFlipMacro, GammaFlipColor, DashStyleHelper.Solid, 4);
             }
         }
     }

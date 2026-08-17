@@ -14,15 +14,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
     public static class GammaLevelsAnalyzer
     {
-        public static GammaLevelsResult Analyze(List<GammaStrikeModel> strikes)
+        public static GammaLevelsResult Analyze(List<GammaStrikeModel> strikes, double underlyingPrice)
         {
             var result = new GammaLevelsResult();
 
             if (strikes == null || strikes.Count == 0)
                 return result;
 
-            double maxCallGEX = double.MinValue;
-            double minPutGEX = double.MaxValue; // Look for the most negative GEX
             double totalNetGex = 0;
 
             // Dictionary to store NetGEX by Strike for Gamma Flip calculation
@@ -36,62 +34,81 @@ namespace NinjaTrader.NinjaScript.Indicators
                 double netGEX = callGEX + putGEX;
 
                 totalNetGex += netGEX;
-                netGexByStrike[strike.Strike] = netGEX;
+                
+                if (!netGexByStrike.ContainsKey(strike.Strike))
+                    netGexByStrike[strike.Strike] = 0;
+                netGexByStrike[strike.Strike] += netGEX;
+            }
 
-                if (callGEX > maxCallGEX)
+            // Call Wall: Strike con el Net GEX más POSITIVO, por encima o igual al precio del subyacente
+            // Put Wall: Strike con el Net GEX más NEGATIVO, por debajo o igual al precio del subyacente
+            double maxPositiveGex = 0;
+            double maxNegativeGex = 0;
+
+            foreach (var kvp in netGexByStrike)
+            {
+                double strikePrice = kvp.Key;
+                double netGex = kvp.Value;
+
+                if (strikePrice >= underlyingPrice && netGex > maxPositiveGex)
                 {
-                    maxCallGEX = callGEX;
-                    result.CallWallStrike = strike.Strike;
+                    maxPositiveGex = netGex;
+                    result.CallWallStrike = strikePrice;
                 }
 
-                if (putGEX < minPutGEX) // Note: less than because we want the most negative value
+                if (strikePrice <= underlyingPrice && netGex < maxNegativeGex)
                 {
-                    minPutGEX = putGEX;
-                    result.PutWallStrike = strike.Strike;
+                    maxNegativeGex = netGex;
+                    result.PutWallStrike = strikePrice;
                 }
             }
 
-            // Gamma Flip: find where NetGEX is closest to 0.
-            // Para evitar que tome strikes muy profundos OTM (donde el GEX es casi 0 por falta de liquidez),
-            // restringimos la búsqueda del Zero Gravity / Flip para que esté estrictamente ENTRE el Put Wall y el Call Wall.
+            // Fallback: si no encontró Call Wall por encima, buscar el mayor positivo en cualquier lugar
+            if (result.CallWallStrike == 0)
+            {
+                foreach (var kvp in netGexByStrike)
+                {
+                    if (kvp.Value > maxPositiveGex) { maxPositiveGex = kvp.Value; result.CallWallStrike = kvp.Key; }
+                }
+            }
+            // Fallback: si no encontró Put Wall por debajo, buscar el más negativo en cualquier lugar
+            if (result.PutWallStrike == 0)
+            {
+                foreach (var kvp in netGexByStrike)
+                {
+                    if (kvp.Value < maxNegativeGex) { maxNegativeGex = kvp.Value; result.PutWallStrike = kvp.Key; }
+                }
+            }
+
+            // Gamma Flip: find where NetGEX is closest to 0 BETWEEN the walls.
             double closestToZeroDiff = double.MaxValue;
             double gammaFlipStrike = 0;
             
             double minWall = Math.Min(result.PutWallStrike, result.CallWallStrike);
             double maxWall = Math.Max(result.PutWallStrike, result.CallWallStrike);
 
-            foreach (var strike in strikes)
+            foreach (var kvp in netGexByStrike)
             {
-                if (strike.CallGamma == 0 && strike.PutGamma == 0)
+                if (kvp.Key < minWall || kvp.Key > maxWall)
                     continue;
 
-                // Buscar solo entre las paredes principales
-                if (strike.Strike < minWall || strike.Strike > maxWall)
-                    continue;
-
-                double callGEX = strike.CallGamma * strike.CallOpenInterest * 100;
-                double putGEX = strike.PutGamma * strike.PutOpenInterest * 100 * -1;
-                double netGEX = callGEX + putGEX;
-                
-                double absGex = Math.Abs(netGEX);
+                double absGex = Math.Abs(kvp.Value);
                 if (absGex < closestToZeroDiff)
                 {
                     closestToZeroDiff = absGex;
-                    gammaFlipStrike = strike.Strike;
+                    gammaFlipStrike = kvp.Key;
                 }
             }
             
-            // Si por alguna razón extrema no encontró nada, hacemos un fallback sin restricción
+            // Fallback sin restricción
             if (gammaFlipStrike == 0)
             {
-                foreach (var strike in strikes)
+                foreach (var kvp in netGexByStrike)
                 {
-                    if (strike.CallGamma == 0 && strike.PutGamma == 0) continue;
-                    double netGEX = (strike.CallGamma * strike.CallOpenInterest * 100) + (strike.PutGamma * strike.PutOpenInterest * 100 * -1);
-                    if (Math.Abs(netGEX) < closestToZeroDiff)
+                    if (Math.Abs(kvp.Value) < closestToZeroDiff)
                     {
-                        closestToZeroDiff = Math.Abs(netGEX);
-                        gammaFlipStrike = strike.Strike;
+                        closestToZeroDiff = Math.Abs(kvp.Value);
+                        gammaFlipStrike = kvp.Key;
                     }
                 }
             }
