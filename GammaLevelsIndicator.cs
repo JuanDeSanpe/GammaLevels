@@ -83,7 +83,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 ScaleJustification = NinjaTrader.Gui.Chart.ScaleJustification.Right;
                 IsSuspendedWhileInactive = true;
 
-                FileName = "2026-08-17-StockAndOptionQuoteForQQQ.csv";
+                FileName = "CadenaDeOpcionesQQQ.csv";
                 RefreshInterval = 5;
                 CallWallColor = Brushes.LimeGreen;
                 PutWallColor = Brushes.Red;

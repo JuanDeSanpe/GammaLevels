@@ -1,0 +1,6 @@
+# Ignorar carpetas de datos masivos y archivos de Excel
+Archivos Cadena de Opciones/
+Backtest Opciones/
+*.csv
+*.xlsx
+*.xlsm
