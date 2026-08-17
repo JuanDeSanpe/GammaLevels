@@ -15,28 +15,43 @@ namespace NinjaTrader.NinjaScript.Indicators
         public int PutOpenInterest { get; set; }
     }
 
+    public class GammaParseResult
+    {
+        public List<GammaStrikeModel> Strikes { get; set; }
+        public double UnderlyingPrice { get; set; }
+
+        public GammaParseResult()
+        {
+            Strikes = new List<GammaStrikeModel>();
+        }
+    }
+
     public static class GammaDataParser
     {
-        public static List<GammaStrikeModel> ParseCSV(string filePath, Action<string> logError)
+        public static GammaParseResult ParseCSV(string filePath, Action<string> logError)
         {
-            var strikes = new List<GammaStrikeModel>();
-            if (!File.Exists(filePath)) return strikes;
+            var result = new GammaParseResult();
+            if (!File.Exists(filePath)) return result;
 
             try
             {
-                // Reading with FileShare.ReadWrite to avoid locking issues if the file is being updated
                 using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                 using (var sr = new StreamReader(fs))
                 {
                     string line;
                     bool inDataSection = false;
-
-                    // Regex to split by comma, ignoring commas inside quotes
+                    bool inUnderlyingSection = false;
                     Regex csvSplit = new Regex(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
 
                     while ((line = sr.ReadLine()) != null)
                     {
                         if (string.IsNullOrWhiteSpace(line)) continue;
+                        
+                        if (line.StartsWith("UNDERLYING")) 
+                        { 
+                            inUnderlyingSection = true; 
+                            continue; 
+                        }
 
                         var columns = csvSplit.Split(line);
                         for (int i = 0; i < columns.Length; i++)
@@ -44,7 +59,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                             columns[i] = columns[i].Trim('\"').Trim();
                         }
 
-                        // Look for the header line to start parsing data
+                        if (inUnderlyingSection && columns.Length >= 12)
+                        {
+                            if (columns[0] != "LAST") // Saltamos la cabecera
+                            {
+                                double price;
+                                if (double.TryParse(columns[0], NumberStyles.Any, CultureInfo.InvariantCulture, out price))
+                                {
+                                    result.UnderlyingPrice = price;
+                                    inUnderlyingSection = false;
+                                }
+                            }
+                        }
+
                         if (columns.Length >= 25 && columns[14] == "Strike" && columns[5] == "Gamma")
                         {
                             inDataSection = true;
@@ -53,7 +80,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                         if (inDataSection)
                         {
-                            // If we hit a line that doesn't have enough columns or no strike, we might be done
                             if (columns.Length < 25) break;
 
                             double strike;
@@ -77,7 +103,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 if (int.TryParse(columns[24].Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putOI))
                                     model.PutOpenInterest = putOI;
 
-                                strikes.Add(model);
+                                result.Strikes.Add(model);
                             }
                         }
                     }
@@ -88,7 +114,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (logError != null) logError("GammaDataParser Error: " + ex.Message);
             }
 
-            return strikes;
+            return result;
         }
     }
 }

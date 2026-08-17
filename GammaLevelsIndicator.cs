@@ -21,6 +21,7 @@ namespace NinjaTrader.NinjaScript.Indicators
     {
         private System.Threading.Timer refreshTimer;
         private string folderPath;
+        private double lastKnownNqPrice = 0;
 
         [NinjaScriptProperty]
         [Display(Name="File Name", Description="Name of the CSV file in Archivos Cadena de Opciones folder", Order=1, GroupName="Parameters")]
@@ -70,7 +71,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 Description = @"Displays Gamma Levels from TOS Options Chain CSV";
                 Name = "GammaLevelsIndicator";
-                Calculate = Calculate.OnBarClose; // Minimal impact since we use an async timer
+                Calculate = Calculate.OnBarClose;
                 IsOverlay = true;
                 DisplayInDataBox = true;
                 DrawOnPricePanel = true;
@@ -92,7 +93,6 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
             else if (State == State.DataLoaded)
             {
-                // Start background timer
                 if (refreshTimer == null)
                 {
                     refreshTimer = new System.Threading.Timer(TimerCallback, null, 0, RefreshInterval * 1000);
@@ -110,24 +110,33 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void TimerCallback(object state)
         {
+            // Esperar a que tengamos el precio del NQ disponible
+            if (lastKnownNqPrice == 0) return;
+
             try
             {
                 string fullPath = Path.Combine(folderPath, FileName);
-                var strikes = GammaDataParser.ParseCSV(fullPath, msg => Print(msg));
-                var levels = GammaLevelsAnalyzer.Analyze(strikes);
+                var parsedData = GammaDataParser.ParseCSV(fullPath, msg => Print(msg));
+                var levels = GammaLevelsAnalyzer.Analyze(parsedData.Strikes);
 
-                if (levels.IsValid)
+                if (levels.IsValid && parsedData.UnderlyingPrice > 0)
                 {
-                    // Ensure we are attached to a chart and can invoke on the UI thread
+                    // Calculamos el multiplicador dinámico
+                    double ratio = lastKnownNqPrice / parsedData.UnderlyingPrice;
+                    
+                    double callWallNq = levels.CallWallStrike * ratio;
+                    double putWallNq = levels.PutWallStrike * ratio;
+                    double gammaFlipNq = levels.GammaFlipStrike * ratio;
+
                     if (ChartControl != null && ChartControl.Dispatcher != null)
                     {
                         ChartControl.Dispatcher.InvokeAsync(new Action(() => 
                         {
                             try
                             {
-                                Draw.HorizontalLine(this, "CallWall", levels.CallWallStrike, CallWallColor);
-                                Draw.HorizontalLine(this, "PutWall", levels.PutWallStrike, PutWallColor);
-                                Draw.HorizontalLine(this, "GammaFlip", levels.GammaFlipStrike, GammaFlipColor);
+                                Draw.HorizontalLine(this, "CallWall", callWallNq, CallWallColor);
+                                Draw.HorizontalLine(this, "PutWall", putWallNq, PutWallColor);
+                                Draw.HorizontalLine(this, "GammaFlip", gammaFlipNq, GammaFlipColor);
                                 ForceRefresh();
                             }
                             catch (Exception drawEx)
@@ -146,7 +155,68 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         protected override void OnBarUpdate()
         {
-            // Indicator logic runs asynchronously in the TimerCallback
+            if (CurrentBar >= 0)
+            {
+                // Cacheamos el precio actual del NQ para que el Timer asíncrono pueda leerlo sin bloqueos
+                lastKnownNqPrice = Close[0];
+            }
         }
     }
 }
+
+#region NinjaScript generated code. Neither change nor remove.
+
+namespace NinjaTrader.NinjaScript.Indicators
+{
+	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
+	{
+		private GammaLevelsIndicator[] cacheGammaLevelsIndicator;
+		public GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval)
+		{
+			return GammaLevelsIndicator(Input, fileName, refreshInterval);
+		}
+
+		public GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input, string fileName, int refreshInterval)
+		{
+			if (cacheGammaLevelsIndicator != null)
+				for (int idx = 0; idx < cacheGammaLevelsIndicator.Length; idx++)
+					if (cacheGammaLevelsIndicator[idx] != null && cacheGammaLevelsIndicator[idx].FileName == fileName && cacheGammaLevelsIndicator[idx].RefreshInterval == refreshInterval && cacheGammaLevelsIndicator[idx].EqualsInput(input))
+						return cacheGammaLevelsIndicator[idx];
+			return CacheIndicator<GammaLevelsIndicator>(new GammaLevelsIndicator(){ FileName = fileName, RefreshInterval = refreshInterval }, input, ref cacheGammaLevelsIndicator);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
+{
+	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
+	{
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval)
+		{
+			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval);
+		}
+
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval)
+		{
+			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval);
+		}
+	}
+}
+
+namespace NinjaTrader.NinjaScript.Strategies
+{
+	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
+	{
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval)
+		{
+			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval);
+		}
+
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval)
+		{
+			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval);
+		}
+	}
+}
+
+#endregion
