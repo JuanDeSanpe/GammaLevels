@@ -20,12 +20,6 @@ using NinjaTrader.NinjaScript.Indicators;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-    public enum RatioCalculationMode
-    {
-        Fixed,
-        Smoothed
-    }
-
     public enum GammaDisplayMode
     {
         Both,
@@ -42,7 +36,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         private DateTime sessionStartTime;
         private DispatcherTimer timer;
 
-        // Variables para pasar datos del hilo secundario al OnBarUpdate
         private double lastCall0DTE = 0;
         private double lastPut0DTE = 0;
         private double lastFlip0DTE = 0;
@@ -52,7 +45,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private bool needsRedraw = false;
         private double savedRatio = 0;
         private string label0DTE = "";
-        private bool isTimerStarted = false;
+        private string currentHudText = "";
 
         [NinjaScriptProperty]
         [Display(Name="File Name", Description="Name of the CSV file in Archivos Cadena de Opciones folder", Order=1, GroupName="Parameters")]
@@ -97,11 +90,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         [NinjaScriptProperty]
-        [Display(Name="Ratio Calculation Mode", Description="Fixed: Fija el ratio una vez. Smoothed: Ajuste dinámico suave.", Order=6, GroupName="Parameters")]
-        public RatioCalculationMode RatioMode { get; set; }
-
-        [NinjaScriptProperty]
-        [Display(Name="Display Mode", Description="Mostrar 0DTE, Macro o ambos", Order=7, GroupName="Parameters")]
+        [Display(Name="Display Mode", Description="Mostrar 0DTE, Macro o ambos", Order=5, GroupName="Parameters")]
         public GammaDisplayMode DisplayMode { get; set; }
 
         protected override void OnStateChange()
@@ -125,7 +114,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                 CallWallColor = Brushes.LimeGreen;
                 PutWallColor = Brushes.Red;
                 GammaFlipColor = Brushes.White;
-                RatioMode = RatioCalculationMode.Fixed;
                 DisplayMode = GammaDisplayMode.Both;
             }
             else if (State == State.Configure)
@@ -136,17 +124,8 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 if (refreshTimer == null)
                 {
-                    // Inicializar parado (Infinite)
-                    refreshTimer = new System.Threading.Timer(TimerCallback, null, System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
-                }
-            }
-            else if (State == State.Realtime)
-            {
-                // Cuando NinjaTrader termina de cargar todo el historial, ¡dispara el timer al instante!
-                if (refreshTimer != null && !isTimerStarted)
-                {
-                    refreshTimer.Change(0, RefreshInterval * 1000);
-                    isTimerStarted = true;
+                    // Iniciar el temporizador inmediatamente
+                    refreshTimer = new System.Threading.Timer(TimerCallback, null, 0, RefreshInterval * 1000);
                 }
             }
             else if (State == State.Terminated)
@@ -161,11 +140,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void TimerCallback(object state)
         {
-            if (lastKnownNqPrice == 0 || sessionStartTime == DateTime.MinValue) return;
+            if (sessionStartTime == DateTime.MinValue) return;
 
             try
             {
                 string fullPath = Path.Combine(folderPath, FileName);
+                DateTime fileTime = System.IO.File.GetLastWriteTime(fullPath);
+
                 var parsedData = GammaDataParser.ParseCSV(fullPath, msg => Print(msg));
                 var validStrikes = parsedData.Strikes.Where(s => s.ExpirationDate > DateTime.MinValue).ToList();
                 List<GammaStrikeModel> strikes0DTE = parsedData.Strikes;
@@ -188,20 +169,31 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 if ((levels0DTE.IsValid || levelsMacro.IsValid) && parsedData.UnderlyingPrice > 0)
                 {
-                    double currentRatio = lastKnownNqPrice / parsedData.UnderlyingPrice;
-                    double ratioToUse = currentRatio;
+                    // Solo calculamos el ratio la primera vez. Se queda "Fixed" de por vida para evitar que las lineas se muevan.
+                    if (savedRatio == 0)
+                    {
+                        double exactNqPrice = 0;
+                        try 
+                        {
+                            int maxBar = CurrentBar;
+                            for (int i = maxBar; i >= 0; i--)
+                            {
+                                if (Time[i] <= fileTime)
+                                {
+                                    exactNqPrice = Close[i];
+                                    break;
+                                }
+                            }
+                        } 
+                        catch { }
 
-                    if (RatioMode == RatioCalculationMode.Fixed)
-                    {
-                        if (savedRatio == 0) savedRatio = currentRatio;
-                        ratioToUse = savedRatio;
+                        // Fallback si no hay historial
+                        if (exactNqPrice == 0) exactNqPrice = lastKnownNqPrice;
+                        
+                        savedRatio = exactNqPrice / parsedData.UnderlyingPrice;
                     }
-                    else if (RatioMode == RatioCalculationMode.Smoothed)
-                    {
-                        if (savedRatio == 0) savedRatio = currentRatio;
-                        else savedRatio = (savedRatio * 0.90) + (currentRatio * 0.10); // EMA (10% peso al nuevo precio)
-                        ratioToUse = savedRatio;
-                    }
+                    
+                    double ratioToUse = savedRatio;
 
                     // 0DTE
                     double callWall0DTE_Nq = levels0DTE.CallWallStrike * ratioToUse;
@@ -213,37 +205,22 @@ namespace NinjaTrader.NinjaScript.Indicators
                     double putWallMacro_Nq = levelsMacro.PutWallStrike * ratioToUse;
                     double flipMacro_Nq = levelsMacro.GammaFlipStrike * ratioToUse;
 
-                    if (ChartControl != null && ChartControl.Dispatcher != null)
-                    {
-                        ChartControl.Dispatcher.InvokeAsync(new Action(() => 
-                        {
-                            try
-                            {
-                                lastCall0DTE = callWall0DTE_Nq;
-                                lastPut0DTE = putWall0DTE_Nq;
-                                lastFlip0DTE = flip0DTE_Nq;
-                                lastCallMacro = callWallMacro_Nq;
-                                lastPutMacro = putWallMacro_Nq;
-                                lastFlipMacro = flipMacro_Nq;
-                                label0DTE = validStrikes.Count > 0 ? validStrikes.Min(s => s.ExpirationDate).ToString("dd/MMM") : "0DTE";
-                                needsRedraw = true;
-
-                                string hudText = "";
-                                if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.OnlyMacro)
-                                    hudText += "MACRO: " + (levelsMacro.TotalNetGex > 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)") + "\n";
-                                if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.Only0DTE)
-                                    hudText += "0DTE: " + (levels0DTE.TotalNetGex > 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)");
-                                
-                                Draw.TextFixed(this, "GammaHUD", hudText.Trim(), TextPosition.TopRight, Brushes.LightGray, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
-
-                                ForceRefresh();
-                            }
-                            catch (Exception drawEx)
-                            {
-                                Print("GammaLevelsIndicator Draw Error: " + drawEx.Message);
-                            }
-                        }));
-                    }
+                    lastCall0DTE = callWall0DTE_Nq;
+                    lastPut0DTE = putWall0DTE_Nq;
+                    lastFlip0DTE = flip0DTE_Nq;
+                    lastCallMacro = callWallMacro_Nq;
+                    lastPutMacro = putWallMacro_Nq;
+                    lastFlipMacro = flipMacro_Nq;
+                    label0DTE = validStrikes.Count > 0 ? validStrikes.Min(s => s.ExpirationDate).ToString("dd/MMM") : "0DTE";
+                    
+                    string hud = "";
+                    if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.OnlyMacro)
+                        hud += "MACRO: " + (levelsMacro.TotalNetGex > 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)") + "\n";
+                    if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.Only0DTE)
+                        hud += "0DTE: " + (levels0DTE.TotalNetGex > 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)");
+                    currentHudText = hud.Trim();
+                    
+                    needsRedraw = true;
                 }
             }
             catch (Exception ex)
@@ -267,6 +244,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             // Dibujamos las lineas desde OnBarUpdate (hilo nativo de NinjaTrader)
             if (needsRedraw && sessionStartTime != DateTime.MinValue)
             {
+                if (!string.IsNullOrEmpty(currentHudText))
+                    Draw.TextFixed(this, "GammaHUD", currentHudText, TextPosition.TopRight, Brushes.LightGray, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+
                 DateTime futureTime = lastKnownTime.AddDays(5);
                 
                 // 0DTE
@@ -332,18 +312,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private GammaLevelsIndicator[] cacheGammaLevelsIndicator;
-		public GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
+		public GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, GammaDisplayMode displayMode)
 		{
-			return GammaLevelsIndicator(Input, fileName, refreshInterval, ratioMode, displayMode);
+			return GammaLevelsIndicator(Input, fileName, refreshInterval, displayMode);
 		}
 
-		public GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input, string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
+		public GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input, string fileName, int refreshInterval, GammaDisplayMode displayMode)
 		{
 			if (cacheGammaLevelsIndicator != null)
 				for (int idx = 0; idx < cacheGammaLevelsIndicator.Length; idx++)
-					if (cacheGammaLevelsIndicator[idx] != null && cacheGammaLevelsIndicator[idx].FileName == fileName && cacheGammaLevelsIndicator[idx].RefreshInterval == refreshInterval && cacheGammaLevelsIndicator[idx].RatioMode == ratioMode && cacheGammaLevelsIndicator[idx].DisplayMode == displayMode && cacheGammaLevelsIndicator[idx].EqualsInput(input))
+					if (cacheGammaLevelsIndicator[idx] != null && cacheGammaLevelsIndicator[idx].FileName == fileName && cacheGammaLevelsIndicator[idx].RefreshInterval == refreshInterval && cacheGammaLevelsIndicator[idx].DisplayMode == displayMode && cacheGammaLevelsIndicator[idx].EqualsInput(input))
 						return cacheGammaLevelsIndicator[idx];
-			return CacheIndicator<GammaLevelsIndicator>(new GammaLevelsIndicator(){ FileName = fileName, RefreshInterval = refreshInterval, RatioMode = ratioMode, DisplayMode = displayMode }, input, ref cacheGammaLevelsIndicator);
+			return CacheIndicator<GammaLevelsIndicator>(new GammaLevelsIndicator(){ FileName = fileName, RefreshInterval = refreshInterval, DisplayMode = displayMode }, input, ref cacheGammaLevelsIndicator);
 		}
 	}
 }
@@ -352,14 +332,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval, ratioMode, displayMode);
+			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval, displayMode);
 		}
 
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval, ratioMode, displayMode);
+			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval, displayMode);
 		}
 	}
 }
@@ -368,14 +348,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(string fileName, int refreshInterval, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval, ratioMode, displayMode);
+			return indicator.GammaLevelsIndicator(Input, fileName, refreshInterval, displayMode);
 		}
 
-		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval, RatioCalculationMode ratioMode, GammaDisplayMode displayMode)
+		public Indicators.GammaLevelsIndicator GammaLevelsIndicator(ISeries<double> input , string fileName, int refreshInterval, GammaDisplayMode displayMode)
 		{
-			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval, ratioMode, displayMode);
+			return indicator.GammaLevelsIndicator(input, fileName, refreshInterval, displayMode);
 		}
 	}
 }
