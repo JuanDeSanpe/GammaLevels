@@ -22,6 +22,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         private System.Threading.Timer refreshTimer;
         private string folderPath;
         private double lastKnownNqPrice = 0;
+        private DateTime sessionStartTime;
+        private DateTime lastKnownTime;
 
         [NinjaScriptProperty]
         [Display(Name="File Name", Description="Name of the CSV file in Archivos Cadena de Opciones folder", Order=1, GroupName="Parameters")]
@@ -110,8 +112,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void TimerCallback(object state)
         {
-            // Esperar a que tengamos el precio del NQ disponible
-            if (lastKnownNqPrice == 0) return;
+            if (lastKnownNqPrice == 0 || sessionStartTime == DateTime.MinValue) return;
 
             try
             {
@@ -121,7 +122,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 if (levels.IsValid && parsedData.UnderlyingPrice > 0)
                 {
-                    // Calculamos el multiplicador dinámico
                     double ratio = lastKnownNqPrice / parsedData.UnderlyingPrice;
                     
                     double callWallNq = levels.CallWallStrike * ratio;
@@ -134,9 +134,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                         {
                             try
                             {
-                                Draw.HorizontalLine(this, "CallWall", callWallNq, CallWallColor);
-                                Draw.HorizontalLine(this, "PutWall", putWallNq, PutWallColor);
-                                Draw.HorizontalLine(this, "GammaFlip", gammaFlipNq, GammaFlipColor);
+                                // Draw a line from the start of the session into the future to act as a ray
+                                DateTime futureTime = lastKnownTime.AddDays(5);
+                                
+                                Draw.Line(this, "CallWall", false, sessionStartTime, callWallNq, futureTime, callWallNq, CallWallColor, DashStyleHelper.Solid, 2);
+                                Draw.Line(this, "PutWall", false, sessionStartTime, putWallNq, futureTime, putWallNq, PutWallColor, DashStyleHelper.Solid, 2);
+                                Draw.Line(this, "GammaFlip", false, sessionStartTime, gammaFlipNq, futureTime, gammaFlipNq, GammaFlipColor, DashStyleHelper.Solid, 2);
+                                
                                 ForceRefresh();
                             }
                             catch (Exception drawEx)
@@ -157,8 +161,18 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             if (CurrentBar >= 0)
             {
-                // Cacheamos el precio actual del NQ para que el Timer asíncrono pueda leerlo sin bloqueos
                 lastKnownNqPrice = Close[0];
+                lastKnownTime = Time[0];
+                
+                if (Bars.IsFirstBarOfSession)
+                {
+                    sessionStartTime = Time[0];
+                }
+                else if (sessionStartTime == DateTime.MinValue)
+                {
+                    // Fallback si el indicador se carga a mitad de sesión
+                    sessionStartTime = Time[0].Date;
+                }
             }
         }
     }
