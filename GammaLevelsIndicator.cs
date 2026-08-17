@@ -45,6 +45,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         private string label0DTE = "";
         private string currentHudText = "";
         private bool needsRedraw = false;
+        private bool isRealTime = false;
+        private int barCount = 0;
 
         [NinjaScriptProperty]
         [Display(Name="File Name", Description="Name of the CSV file in Archivos Cadena de Opciones folder", Order=1, GroupName="Parameters")]
@@ -83,13 +85,6 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 folderPath = Path.Combine(NinjaTrader.Core.Globals.UserDataDir, "bin", "Custom", "Indicators", "TOS Opciones", "Archivos Cadena de Opciones");
             }
-            else if (State == State.DataLoaded)
-            {
-                if (refreshTimer == null)
-                {
-                    refreshTimer = new System.Threading.Timer(TimerCallback, null, 0, RefreshInterval * 1000);
-                }
-            }
             else if (State == State.Terminated)
             {
                 if (refreshTimer != null)
@@ -102,6 +97,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void TimerCallback(object state)
         {
+            if (!isRealTime || lastKnownNqPrice == 0) return;
+
             try
             {
                 string fullPath = Path.Combine(folderPath, FileName);
@@ -125,26 +122,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 if ((levels0DTE.IsValid || levelsMacro.IsValid) && parsedData.UnderlyingPrice > 0)
                 {
-                    if (savedRatio == 0 && lastKnownNqPrice > 0)
+                    if (savedRatio == 0)
                     {
-                        double exactNqPrice = lastKnownNqPrice;
-                        try 
-                        {
-                            int maxBar = CurrentBar;
-                            for (int i = 0; i <= Math.Min(maxBar, 500); i++)
-                            {
-                                if (Time[i] <= fileTime)
-                                {
-                                    exactNqPrice = Close[i];
-                                    break;
-                                }
-                            }
-                        } 
-                        catch { }
-                        savedRatio = exactNqPrice / parsedData.UnderlyingPrice;
+                        savedRatio = lastKnownNqPrice / parsedData.UnderlyingPrice;
                     }
                     
-                    if (savedRatio == 0) return;
                     double ratioToUse = savedRatio;
 
                     lastCall0DTE = levels0DTE.CallWallStrike * ratioToUse;
@@ -167,18 +149,38 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         protected override void OnBarUpdate()
         {
-            if (CurrentBar < 1) return;
+            // ====== HISTORICO: cero trabajo, solo mostrar progreso ======
+            if (State == State.Historical)
+            {
+                barCount++;
+                if (barCount % 10000 == 0)
+                {
+                    Draw.TextFixed(this, "GammaHUD", "Gamma Levels: Cargando grafico... " + barCount + " barras", TextPosition.TopRight, Brushes.Gray, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+                }
+                return;
+            }
+
+            // ====== TIEMPO REAL ======
+            if (!isRealTime)
+            {
+                isRealTime = true;
+                lastKnownNqPrice = Close[0];
+                lastKnownTime = Time[0];
+                sessionStartTime = Time[0].Date;
+                
+                // Arrancar timer AHORA, no antes
+                if (refreshTimer == null)
+                    refreshTimer = new System.Threading.Timer(TimerCallback, null, 0, RefreshInterval * 1000);
+                
+                Draw.TextFixed(this, "GammaHUD", "Gamma Levels: Leyendo CSV...", TextPosition.TopRight, Brushes.Yellow, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+                return;
+            }
 
             lastKnownNqPrice = Close[0];
             lastKnownTime = Time[0];
 
             if (Bars.IsFirstBarOfSession)
                 sessionStartTime = Time[0];
-            else if (sessionStartTime == DateTime.MinValue)
-                sessionStartTime = Time[0].Date;
-
-            // Saltar historico completo para carga instantanea
-            if (State == State.Historical) return;
 
             if (!needsRedraw) return;
 
