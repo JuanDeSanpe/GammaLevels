@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.IO;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
     public class GammaStrikeModel
     {
         public double Strike { get; set; }
+        public DateTime ExpirationDate { get; set; }
         public double CallGamma { get; set; }
         public int CallOpenInterest { get; set; }
         public double PutGamma { get; set; }
@@ -28,6 +30,27 @@ namespace NinjaTrader.NinjaScript.Indicators
 
     public static class GammaDataParser
     {
+        private static double ParseDouble(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return 0;
+            s = s.Trim();
+            
+            // Si tiene coma y punto (ej: 1,000.50), quitamos la coma de los miles
+            if (s.Contains(",") && s.Contains("."))
+            {
+                s = s.Replace(",", "");
+            }
+            // Si solo tiene coma (ej: 0,05 español), la cambiamos a punto decimal
+            else if (s.Contains(","))
+            {
+                s = s.Replace(",", ".");
+            }
+            
+            double result;
+            double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out result);
+            return result;
+        }
+
         public static GammaParseResult ParseCSV(string filePath, Action<string> logError)
         {
             var result = new GammaParseResult();
@@ -41,16 +64,25 @@ namespace NinjaTrader.NinjaScript.Indicators
                     string line;
                     bool inDataSection = false;
                     bool inUnderlyingSection = false;
-                    Regex csvSplit = new Regex(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+                    Regex csvSplit = null;
+                    int colStrike = -1, colExp = -1, colCallGamma = -1, colCallOI = -1, colPutGamma = -1, colPutOI = -1;
 
                     while ((line = sr.ReadLine()) != null)
                     {
                         if (string.IsNullOrWhiteSpace(line)) continue;
                         
-                        if (line.StartsWith("UNDERLYING")) 
+                        if (line.StartsWith("UNDERLYING;") || line.StartsWith("UNDERLYING,")) 
                         { 
                             inUnderlyingSection = true; 
                             continue; 
+                        }
+
+                        if (csvSplit == null)
+                        {
+                            if (line.Contains(";"))
+                                csvSplit = new Regex(";(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+                            else
+                                csvSplit = new Regex(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
                         }
 
                         var columns = csvSplit.Split(line);
@@ -63,45 +95,68 @@ namespace NinjaTrader.NinjaScript.Indicators
                         {
                             if (columns[0] != "LAST") // Saltamos la cabecera
                             {
-                                double price;
-                                if (double.TryParse(columns[0], NumberStyles.Any, CultureInfo.InvariantCulture, out price))
+                                double price = ParseDouble(columns[0]);
+                                if (price > 0)
                                 {
+                                    // Si Excel en español quitó el punto decimal (ej. 731.07 -> 73107)
+                                    if (price > 10000) price = price / 100.0;
+                                    
                                     result.UnderlyingPrice = price;
                                     inUnderlyingSection = false;
                                 }
                             }
                         }
 
-                        if (columns.Length >= 25 && columns[14] == "Strike" && columns[5] == "Gamma")
+                        // Detect Headers
+                        if (!inDataSection && columns.Length > 5 && columns.Contains("Strike") && columns.Contains("Gamma"))
                         {
-                            inDataSection = true;
+                            colStrike = Array.IndexOf(columns, "Strike");
+                            colExp = Array.IndexOf(columns, "Exp");
+                            colCallGamma = Array.IndexOf(columns, "Gamma");
+                            colCallOI = Array.IndexOf(columns, "Open.Int");
+                            
+                            colPutGamma = Array.LastIndexOf(columns, "Gamma");
+                            colPutOI = Array.LastIndexOf(columns, "Open.Int");
+
+                            if (colStrike != -1 && colCallGamma != -1 && colPutGamma != -1 && colCallGamma != colPutGamma)
+                            {
+                                inDataSection = true;
+                            }
                             continue;
                         }
 
                         if (inDataSection)
                         {
-                            if (columns.Length < 25) break;
+                            if (columns.Length <= Math.Max(colPutGamma, colPutOI)) continue;
 
-                            double strike;
-                            if (double.TryParse(columns[14], NumberStyles.Any, CultureInfo.InvariantCulture, out strike))
+                            double strike = ParseDouble(columns[colStrike]);
+                            if (strike > 0)
                             {
-                                var model = new GammaStrikeModel { Strike = strike };
+                                DateTime expDate = DateTime.MinValue;
+                                if (colExp != -1 && colExp < columns.Length && !string.IsNullOrWhiteSpace(columns[colExp]))
+                                {
+                                    DateTime.TryParseExact(columns[colExp], "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out expDate);
+                                }
+                                
+                                var model = new GammaStrikeModel { Strike = strike, ExpirationDate = expDate };
 
-                                double callGamma;
-                                if (double.TryParse(columns[5], NumberStyles.Any, CultureInfo.InvariantCulture, out callGamma))
-                                    model.CallGamma = callGamma;
+                                model.CallGamma = ParseDouble(columns[colCallGamma]);
 
                                 int callOI;
-                                if (int.TryParse(columns[7].Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out callOI))
+                                if (int.TryParse(columns[colCallOI].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out callOI))
                                     model.CallOpenInterest = callOI;
 
-                                double putGamma;
-                                if (double.TryParse(columns[22], NumberStyles.Any, CultureInfo.InvariantCulture, out putGamma))
-                                    model.PutGamma = putGamma;
+                                model.PutGamma = ParseDouble(columns[colPutGamma]);
 
                                 int putOI;
-                                if (int.TryParse(columns[24].Replace(",", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putOI))
+                                if (int.TryParse(columns[colPutOI].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putOI))
                                     model.PutOpenInterest = putOI;
+
+                                // Fallback: si no tenemos UnderlyingPrice, usamos el Strike ATM (donde Gamma es máxima)
+                                if (result.UnderlyingPrice == 0 && (model.CallGamma > 0.05 || model.PutGamma > 0.05))
+                                {
+                                    result.UnderlyingPrice = strike; // Aproximación muy cercana
+                                }
 
                                 result.Strikes.Add(model);
                             }

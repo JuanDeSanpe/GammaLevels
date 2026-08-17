@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -14,6 +15,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Xml.Serialization;
 using System.IO;
 using NinjaTrader.NinjaScript.DrawingTools;
+using System.Linq;
 
 namespace NinjaTrader.NinjaScript.Indicators
 {
@@ -118,15 +120,38 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 string fullPath = Path.Combine(folderPath, FileName);
                 var parsedData = GammaDataParser.ParseCSV(fullPath, msg => Print(msg));
-                var levels = GammaLevelsAnalyzer.Analyze(parsedData.Strikes);
+                var validStrikes = parsedData.Strikes.Where(s => s.ExpirationDate > DateTime.MinValue).ToList();
+                List<GammaStrikeModel> strikes0DTE = parsedData.Strikes;
+                List<GammaStrikeModel> strikesMacro = parsedData.Strikes;
 
-                if (levels.IsValid && parsedData.UnderlyingPrice > 0)
+                if (validStrikes.Count > 0)
+                {
+                    DateTime minDate = validStrikes.Min(s => s.ExpirationDate);
+                    strikes0DTE = validStrikes.Where(s => s.ExpirationDate == minDate).ToList();
+                }
+                else
+                {
+                    // Si no se pudo parsear ninguna fecha (ej. por exportación RTD sin columna Exp),
+                    // asumimos que todos los strikes pertenecen al 0DTE como fallback.
+                    strikes0DTE = parsedData.Strikes;
+                }
+
+                var levels0DTE = GammaLevelsAnalyzer.Analyze(strikes0DTE);
+                var levelsMacro = GammaLevelsAnalyzer.Analyze(strikesMacro);
+
+                if ((levels0DTE.IsValid || levelsMacro.IsValid) && parsedData.UnderlyingPrice > 0)
                 {
                     double ratio = lastKnownNqPrice / parsedData.UnderlyingPrice;
                     
-                    double callWallNq = levels.CallWallStrike * ratio;
-                    double putWallNq = levels.PutWallStrike * ratio;
-                    double gammaFlipNq = levels.GammaFlipStrike * ratio;
+                    // 0DTE
+                    double callWall0DTE_Nq = levels0DTE.CallWallStrike * ratio;
+                    double putWall0DTE_Nq = levels0DTE.PutWallStrike * ratio;
+                    double flip0DTE_Nq = levels0DTE.GammaFlipStrike * ratio;
+
+                    // Macro
+                    double callWallMacro_Nq = levelsMacro.CallWallStrike * ratio;
+                    double putWallMacro_Nq = levelsMacro.PutWallStrike * ratio;
+                    double flipMacro_Nq = levelsMacro.GammaFlipStrike * ratio;
 
                     if (ChartControl != null && ChartControl.Dispatcher != null)
                     {
@@ -134,29 +159,33 @@ namespace NinjaTrader.NinjaScript.Indicators
                         {
                             try
                             {
-                                // Draw a line from the start of the session into the future to act as a ray
                                 DateTime futureTime = lastKnownTime.AddDays(5);
                                 
-                                Draw.Line(this, "CallWall", false, sessionStartTime, callWallNq, futureTime, callWallNq, CallWallColor, DashStyleHelper.Solid, 2);
-                                Draw.Line(this, "PutWall", false, sessionStartTime, putWallNq, futureTime, putWallNq, PutWallColor, DashStyleHelper.Solid, 2);
-                                Draw.Line(this, "GammaFlip", false, sessionStartTime, gammaFlipNq, futureTime, gammaFlipNq, GammaFlipColor, DashStyleHelper.Solid, 2);
+                                // 0DTE tags and drawing (Líneas finas punteadas)
+                                string call0DTETag = "CallWall_0DTE_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levels0DTE.CallWallStrike;
+                                string put0DTETag = "PutWall_0DTE_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levels0DTE.PutWallStrike;
+                                string flip0DTETag = "GammaFlip_0DTE_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levels0DTE.GammaFlipStrike;
+
+                                if (levels0DTE.CallWallStrike > 0) Draw.Line(this, call0DTETag, false, sessionStartTime, callWall0DTE_Nq, futureTime, callWall0DTE_Nq, CallWallColor, DashStyleHelper.Dash, 2);
+                                if (levels0DTE.PutWallStrike > 0) Draw.Line(this, put0DTETag, false, sessionStartTime, putWall0DTE_Nq, futureTime, putWall0DTE_Nq, PutWallColor, DashStyleHelper.Dash, 2);
+                                if (levels0DTE.GammaFlipStrike > 0) Draw.Line(this, flip0DTETag, false, sessionStartTime, flip0DTE_Nq, futureTime, flip0DTE_Nq, GammaFlipColor, DashStyleHelper.Dash, 2);
+
+                                // Macro tags and drawing (Líneas gruesas sólidas)
+                                string callMacroTag = "CallWall_Macro_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levelsMacro.CallWallStrike;
+                                string putMacroTag = "PutWall_Macro_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levelsMacro.PutWallStrike;
+                                string flipMacroTag = "GammaFlip_Macro_" + sessionStartTime.ToString("yyyyMMdd") + "_" + levelsMacro.GammaFlipStrike;
+
+                                if (levelsMacro.CallWallStrike > 0) Draw.Line(this, callMacroTag, false, sessionStartTime, callWallMacro_Nq, futureTime, callWallMacro_Nq, CallWallColor, DashStyleHelper.Solid, 4);
+                                if (levelsMacro.PutWallStrike > 0) Draw.Line(this, putMacroTag, false, sessionStartTime, putWallMacro_Nq, futureTime, putWallMacro_Nq, PutWallColor, DashStyleHelper.Solid, 4);
+                                if (levelsMacro.GammaFlipStrike > 0) Draw.Line(this, flipMacroTag, false, sessionStartTime, flipMacro_Nq, futureTime, flipMacro_Nq, GammaFlipColor, DashStyleHelper.Solid, 4);
+
+                                string regime0DTEText = levels0DTE.TotalNetGex > 0 ? "0DTE Régimen: POSITIVO (Baja Volatilidad)" : "0DTE Régimen: NEGATIVO (Alta Volatilidad)";
+                                string regimeMacroText = levelsMacro.TotalNetGex > 0 ? "MACRO Régimen: POSITIVO (Baja Volatilidad)" : "MACRO Régimen: NEGATIVO (Alta Volatilidad)";
                                 
-                                string regimeText;
-                                Brush regimeColor;
+                                Brush hudColor = levels0DTE.TotalNetGex > 0 ? Brushes.LimeGreen : Brushes.Red;
+                                string hudText = string.Format("--- DEBUG INFO ---\nUnderlying: {4}\nRatio: {5:F2}\nCallStrike: {6}\nPutStrike: {7}\n\n--- GEX MACRO ---\nNet GEX: {0:N0}\n{1}\n\n--- GEX 0DTE ---\nNet GEX: {2:N0}\n{3}", levelsMacro.TotalNetGex, regimeMacroText, levels0DTE.TotalNetGex, regime0DTEText, parsedData.UnderlyingPrice, ratio, levelsMacro.CallWallStrike, levelsMacro.PutWallStrike);
                                 
-                                if (levels.TotalNetGex > 0)
-                                {
-                                    regimeText = "Régimen GEX: POSITIVO\nEfecto: Fijación / Baja Volatilidad\nDealers: Buy the Dip / Sell the Rip";
-                                    regimeColor = Brushes.LimeGreen;
-                                }
-                                else
-                                {
-                                    regimeText = "Régimen GEX: NEGATIVO\nEfecto: Aceleración / Alta Volatilidad\nDealers: Vender en caídas / Comprar en subidas";
-                                    regimeColor = Brushes.Red;
-                                }
-                                
-                                string hudText = "Total Net GEX: " + levels.TotalNetGex.ToString("N0") + "\n" + regimeText;
-                                Draw.TextFixed(this, "GammaHUD", hudText, TextPosition.TopRight, regimeColor, new Gui.Tools.SimpleFont("Arial", 12) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
+                                Draw.TextFixed(this, "GammaHUD", hudText, TextPosition.TopRight, hudColor, new Gui.Tools.SimpleFont("Arial", 12) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
 
                                 ForceRefresh();
                             }
