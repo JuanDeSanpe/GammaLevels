@@ -48,18 +48,48 @@ namespace NinjaTrader.NinjaScript.Indicators
                 }
             }
 
-            // Gamma Flip: find where NetGEX crosses 0.
-            // A simple approximation is the strike with the NetGEX closest to 0.
+            // Gamma Flip: find where NetGEX is closest to 0.
+            // Para evitar que tome strikes muy profundos OTM (donde el GEX es casi 0 por falta de liquidez),
+            // restringimos la búsqueda del Zero Gravity / Flip para que esté estrictamente ENTRE el Put Wall y el Call Wall.
             double closestToZeroDiff = double.MaxValue;
             double gammaFlipStrike = 0;
             
-            foreach (var kvp in netGexByStrike)
+            double minWall = Math.Min(result.PutWallStrike, result.CallWallStrike);
+            double maxWall = Math.Max(result.PutWallStrike, result.CallWallStrike);
+
+            foreach (var strike in strikes)
             {
-                double absGex = Math.Abs(kvp.Value);
+                if (strike.CallGamma == 0 && strike.PutGamma == 0)
+                    continue;
+
+                // Buscar solo entre las paredes principales
+                if (strike.Strike < minWall || strike.Strike > maxWall)
+                    continue;
+
+                double callGEX = strike.CallGamma * strike.CallOpenInterest * 100;
+                double putGEX = strike.PutGamma * strike.PutOpenInterest * 100 * -1;
+                double netGEX = callGEX + putGEX;
+                
+                double absGex = Math.Abs(netGEX);
                 if (absGex < closestToZeroDiff)
                 {
                     closestToZeroDiff = absGex;
-                    gammaFlipStrike = kvp.Key;
+                    gammaFlipStrike = strike.Strike;
+                }
+            }
+            
+            // Si por alguna razón extrema no encontró nada, hacemos un fallback sin restricción
+            if (gammaFlipStrike == 0)
+            {
+                foreach (var strike in strikes)
+                {
+                    if (strike.CallGamma == 0 && strike.PutGamma == 0) continue;
+                    double netGEX = (strike.CallGamma * strike.CallOpenInterest * 100) + (strike.PutGamma * strike.PutOpenInterest * 100 * -1);
+                    if (Math.Abs(netGEX) < closestToZeroDiff)
+                    {
+                        closestToZeroDiff = Math.Abs(netGEX);
+                        gammaFlipStrike = strike.Strike;
+                    }
                 }
             }
 
