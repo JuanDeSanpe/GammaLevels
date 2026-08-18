@@ -8,6 +8,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         public double CallWallStrike { get; set; }
         public double PutWallStrike { get; set; }
         public double GammaFlipStrike { get; set; }
+        public double MaxCallVolStrike { get; set; }
+        public double MaxPutVolStrike { get; set; }
+        public double MaxCallOiStrike { get; set; }
+        public double MaxPutOiStrike { get; set; }
         public double TotalNetGex { get; set; }
         public bool IsValid { get; set; }
     }
@@ -26,6 +30,11 @@ namespace NinjaTrader.NinjaScript.Indicators
             // Dictionary to store NetGEX by Strike for Gamma Flip calculation
             var netGexByStrike = new Dictionary<double, double>();
 
+            int maxCallVol = 0;
+            int maxPutVol = 0;
+            int maxCallOi = 0;
+            int maxPutOi = 0;
+
             foreach (var strike in strikes)
             {
                 // Multiply by 100 for standard options multiplier
@@ -38,6 +47,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (!netGexByStrike.ContainsKey(strike.Strike))
                     netGexByStrike[strike.Strike] = 0;
                 netGexByStrike[strike.Strike] += netGEX;
+
+                if (strike.CallVolume > maxCallVol) { maxCallVol = strike.CallVolume; result.MaxCallVolStrike = strike.Strike; }
+                if (strike.PutVolume > maxPutVol) { maxPutVol = strike.PutVolume; result.MaxPutVolStrike = strike.Strike; }
+                if (strike.CallOpenInterest > maxCallOi) { maxCallOi = strike.CallOpenInterest; result.MaxCallOiStrike = strike.Strike; }
+                if (strike.PutOpenInterest > maxPutOi) { maxPutOi = strike.PutOpenInterest; result.MaxPutOiStrike = strike.Strike; }
             }
 
             // Call Wall: Strike con el Net GEX más POSITIVO, por encima o igual al precio del subyacente

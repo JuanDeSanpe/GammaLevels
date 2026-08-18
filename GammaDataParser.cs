@@ -13,8 +13,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         public DateTime ExpirationDate { get; set; }
         public double CallGamma { get; set; }
         public int CallOpenInterest { get; set; }
+        public int CallVolume { get; set; }
         public double PutGamma { get; set; }
         public int PutOpenInterest { get; set; }
+        public int PutVolume { get; set; }
     }
 
     public class GammaParseResult
@@ -65,7 +67,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     bool inDataSection = false;
                     bool inUnderlyingSection = false;
                     Regex csvSplit = null;
-                    int colStrike = -1, colExp = -1, colCallGamma = -1, colCallOI = -1, colPutGamma = -1, colPutOI = -1;
+                    int colStrike = -1, colExp = -1, colCallGamma = -1, colCallOI = -1, colCallVol = -1, colPutGamma = -1, colPutOI = -1, colPutVol = -1;
 
                     while ((line = sr.ReadLine()) != null)
                     {
@@ -114,9 +116,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                             colExp = Array.IndexOf(columns, "Exp");
                             colCallGamma = Array.IndexOf(columns, "Gamma");
                             colCallOI = Array.IndexOf(columns, "Open.Int");
+                            colCallVol = Array.IndexOf(columns, "Volume");
                             
                             colPutGamma = Array.LastIndexOf(columns, "Gamma");
                             colPutOI = Array.LastIndexOf(columns, "Open.Int");
+                            colPutVol = Array.LastIndexOf(columns, "Volume");
 
                             if (colStrike != -1 && colCallGamma != -1 && colPutGamma != -1 && colCallGamma != colPutGamma)
                             {
@@ -146,11 +150,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 if (int.TryParse(columns[colCallOI].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out callOI))
                                     model.CallOpenInterest = callOI;
 
+                                int callVol;
+                                if (colCallVol != -1 && colCallVol < columns.Length && int.TryParse(columns[colCallVol].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out callVol))
+                                    model.CallVolume = callVol;
+
                                 model.PutGamma = ParseDouble(columns[colPutGamma]);
 
                                 int putOI;
                                 if (int.TryParse(columns[colPutOI].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putOI))
                                     model.PutOpenInterest = putOI;
+
+                                int putVol;
+                                if (colPutVol != -1 && colPutVol < columns.Length && int.TryParse(columns[colPutVol].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putVol))
+                                    model.PutVolume = putVol;
 
                                 // Fallback: si no tenemos UnderlyingPrice, usamos el Strike ATM (donde Gamma es máxima)
                                 if (result.UnderlyingPrice == 0 && (model.CallGamma > 0.05 || model.PutGamma > 0.05))

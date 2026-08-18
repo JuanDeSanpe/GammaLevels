@@ -38,9 +38,18 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double lastCall0DTE = 0;
         private double lastPut0DTE = 0;
         private double lastFlip0DTE = 0;
+        private double lastMaxCallVol0DTE = 0;
+        private double lastMaxPutVol0DTE = 0;
+        private double lastMaxCallOi0DTE = 0;
+        private double lastMaxPutOi0DTE = 0;
+        
         private double lastCallMacro = 0;
         private double lastPutMacro = 0;
         private double lastFlipMacro = 0;
+        private double lastMaxCallVolMacro = 0;
+        private double lastMaxPutVolMacro = 0;
+        private double lastMaxCallOiMacro = 0;
+        private double lastMaxPutOiMacro = 0;
         private double savedRatio = 0;
         private string label0DTE = "";
         private string currentHudText = "";
@@ -132,9 +141,18 @@ namespace NinjaTrader.NinjaScript.Indicators
                     lastCall0DTE = levels0DTE.CallWallStrike * ratioToUse;
                     lastPut0DTE = levels0DTE.PutWallStrike * ratioToUse;
                     lastFlip0DTE = levels0DTE.GammaFlipStrike * ratioToUse;
+                    lastMaxCallVol0DTE = levels0DTE.MaxCallVolStrike * ratioToUse;
+                    lastMaxPutVol0DTE = levels0DTE.MaxPutVolStrike * ratioToUse;
+                    lastMaxCallOi0DTE = levels0DTE.MaxCallOiStrike * ratioToUse;
+                    lastMaxPutOi0DTE = levels0DTE.MaxPutOiStrike * ratioToUse;
+
                     lastCallMacro = levelsMacro.CallWallStrike * ratioToUse;
                     lastPutMacro = levelsMacro.PutWallStrike * ratioToUse;
                     lastFlipMacro = levelsMacro.GammaFlipStrike * ratioToUse;
+                    lastMaxCallVolMacro = levelsMacro.MaxCallVolStrike * ratioToUse;
+                    lastMaxPutVolMacro = levelsMacro.MaxPutVolStrike * ratioToUse;
+                    lastMaxCallOiMacro = levelsMacro.MaxCallOiStrike * ratioToUse;
+                    lastMaxPutOiMacro = levelsMacro.MaxPutOiStrike * ratioToUse;
                     label0DTE = validStrikes.Count > 0 ? validStrikes.Min(s => s.ExpirationDate).ToString("dd/MMM") : "0DTE";
                     
                     currentHudText = "0DTE: " + (levels0DTE.TotalNetGex >= 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)") + "\nMACRO: " + (levelsMacro.TotalNetGex >= 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)");
@@ -211,6 +229,31 @@ namespace NinjaTrader.NinjaScript.Indicators
                     var t3 = Draw.Text(this, "Txt_Flip_0DTE", "Flip 0DTE (" + label0DTE + ")", 5, lastFlip0DTE + 8, Brushes.Yellow);
                     if (t3 != null) t3.Font = new Gui.Tools.SimpleFont("Arial", 9);
                 }
+                
+                if (lastMaxCallVol0DTE > 0)
+                {
+                    Draw.Line(this, "MaxCallVol_0DTE", false, sessionStartTime, lastMaxCallVol0DTE, futureTime, lastMaxCallVol0DTE, Brushes.Cyan, DashStyleHelper.Dot, 2);
+                    var t = Draw.Text(this, "Txt_MaxCallVol_0DTE", "Max Call Vol (" + label0DTE + ")", 5, lastMaxCallVol0DTE + 8, Brushes.Cyan);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                if (lastMaxPutVol0DTE > 0)
+                {
+                    Draw.Line(this, "MaxPutVol_0DTE", false, sessionStartTime, lastMaxPutVol0DTE, futureTime, lastMaxPutVol0DTE, Brushes.Magenta, DashStyleHelper.Dot, 2);
+                    var t = Draw.Text(this, "Txt_MaxPutVol_0DTE", "Max Put Vol (" + label0DTE + ")", 5, lastMaxPutVol0DTE - 8, Brushes.Magenta);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                if (lastMaxCallOi0DTE > 0)
+                {
+                    Draw.Line(this, "MaxCallOi_0DTE", false, sessionStartTime, lastMaxCallOi0DTE, futureTime, lastMaxCallOi0DTE, Brushes.DarkOliveGreen, DashStyleHelper.DashDot, 2);
+                    var t = Draw.Text(this, "Txt_MaxCallOi_0DTE", "Max Call OI (" + label0DTE + ")", 5, lastMaxCallOi0DTE + 8, Brushes.DarkOliveGreen);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                if (lastMaxPutOi0DTE > 0)
+                {
+                    Draw.Line(this, "MaxPutOi_0DTE", false, sessionStartTime, lastMaxPutOi0DTE, futureTime, lastMaxPutOi0DTE, Brushes.Maroon, DashStyleHelper.DashDot, 2);
+                    var t = Draw.Text(this, "Txt_MaxPutOi_0DTE", "Max Put OI (" + label0DTE + ")", 5, lastMaxPutOi0DTE - 8, Brushes.Maroon);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
             }
 
             // Macro
@@ -233,6 +276,31 @@ namespace NinjaTrader.NinjaScript.Indicators
                     Draw.Line(this, "Flip_Macro", false, sessionStartTime, lastFlipMacro, futureTime, lastFlipMacro, Brushes.Goldenrod, DashStyleHelper.Dash, 3);
                     var t6 = Draw.Text(this, "Txt_Flip_Macro", "Flip MACRO", 5, lastFlipMacro + 20, Brushes.Goldenrod);
                     if (t6 != null) t6.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                
+                if (lastMaxCallVolMacro > 0)
+                {
+                    Draw.Line(this, "MaxCallVol_Macro", false, sessionStartTime, lastMaxCallVolMacro, futureTime, lastMaxCallVolMacro, Brushes.DarkCyan, DashStyleHelper.Dot, 3);
+                    var t = Draw.Text(this, "Txt_MaxCallVol_Macro", "Max Call Vol MACRO", 5, lastMaxCallVolMacro + 20, Brushes.DarkCyan);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                if (lastMaxPutVolMacro > 0)
+                {
+                    Draw.Line(this, "MaxPutVol_Macro", false, sessionStartTime, lastMaxPutVolMacro, futureTime, lastMaxPutVolMacro, Brushes.DarkMagenta, DashStyleHelper.Dot, 3);
+                    var t = Draw.Text(this, "Txt_MaxPutVol_Macro", "Max Put Vol MACRO", 5, lastMaxPutVolMacro - 20, Brushes.DarkMagenta);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                if (lastMaxCallOiMacro > 0)
+                {
+                    Draw.Line(this, "MaxCallOi_Macro", false, sessionStartTime, lastMaxCallOiMacro, futureTime, lastMaxCallOiMacro, Brushes.DarkOliveGreen, DashStyleHelper.DashDot, 3);
+                    var t = Draw.Text(this, "Txt_MaxCallOi_Macro", "Max Call OI MACRO", 5, lastMaxCallOiMacro + 20, Brushes.DarkOliveGreen);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
+                }
+                if (lastMaxPutOiMacro > 0)
+                {
+                    Draw.Line(this, "MaxPutOi_Macro", false, sessionStartTime, lastMaxPutOiMacro, futureTime, lastMaxPutOiMacro, Brushes.Maroon, DashStyleHelper.DashDot, 3);
+                    var t = Draw.Text(this, "Txt_MaxPutOi_Macro", "Max Put OI MACRO", 5, lastMaxPutOiMacro - 20, Brushes.Maroon);
+                    if (t != null) t.Font = new Gui.Tools.SimpleFont("Arial", 9);
                 }
             }
 
