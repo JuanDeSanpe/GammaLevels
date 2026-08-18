@@ -32,6 +32,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private System.Threading.Timer refreshTimer;
         private string folderPath;
         private double lastKnownNqPrice;
+        private DateTime lastFileTime = DateTime.MinValue;
         private DateTime lastKnownTime;
         private DateTime sessionStartTime;
 
@@ -114,6 +115,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (!File.Exists(fullPath)) return;
 
                 DateTime fileTime = File.GetLastWriteTime(fullPath);
+                if (fileTime <= lastFileTime) return;
+                lastFileTime = fileTime;
 
                 var parsedData = GammaDataParser.ParseCSV(fullPath, msg => Print(msg));
                 var validStrikes = parsedData.Strikes.Where(s => s.ExpirationDate > DateTime.MinValue).ToList();
@@ -157,6 +160,15 @@ namespace NinjaTrader.NinjaScript.Indicators
                     
                     currentHudText = "0DTE: " + (levels0DTE.TotalNetGex >= 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)") + "\nMACRO: " + (levelsMacro.TotalNetGex >= 0 ? "POS (Baja Vol)" : "NEG (Alta Vol)");
                     needsRedraw = true;
+
+                    TriggerCustomEvent(o => 
+                    {
+                        if (needsRedraw)
+                        {
+                            DrawLevels();
+                            ForceRefresh();
+                        }
+                    }, null);
                 }
             }
             catch (Exception ex)
@@ -200,13 +212,21 @@ namespace NinjaTrader.NinjaScript.Indicators
             if (Bars.IsFirstBarOfSession)
                 sessionStartTime = Time[0];
 
-            if (!needsRedraw) return;
+            if (needsRedraw)
+            {
+                DrawLevels();
+            }
+        }
+
+        private void DrawLevels()
+        {
+            if (sessionStartTime == DateTime.MinValue || lastKnownTime == DateTime.MinValue) return;
 
             // HUD
             if (!string.IsNullOrEmpty(currentHudText))
                 Draw.TextFixed(this, "GammaHUD", currentHudText, TextPosition.TopRight, Brushes.LightGray, new Gui.Tools.SimpleFont("Arial", 11) { Bold = true }, Brushes.Transparent, Brushes.Transparent, 0);
 
-            DateTime futureTime = Time[0].AddDays(5);
+            DateTime futureTime = lastKnownTime.AddDays(5);
 
             // 0DTE
             if (DisplayMode == GammaDisplayMode.Both || DisplayMode == GammaDisplayMode.Only0DTE)

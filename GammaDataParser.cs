@@ -32,6 +32,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 
     public static class GammaDataParser
     {
+        private static int ParseIntClean(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return 0;
+            int result = 0;
+            bool isNegative = false;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == '-') isNegative = true;
+                else if (c >= '0' && c <= '9')
+                {
+                    result = result * 10 + (c - '0');
+                }
+            }
+            return isNegative ? -result : result;
+        }
+
         private static double ParseDouble(string s)
         {
             if (string.IsNullOrWhiteSpace(s)) return 0;
@@ -79,15 +96,18 @@ namespace NinjaTrader.NinjaScript.Indicators
                             continue; 
                         }
 
-                        if (csvSplit == null)
+                        string[] columns;
+                        if (line.Contains(";"))
                         {
-                            if (line.Contains(";"))
-                                csvSplit = new Regex(";(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
-                            else
+                            columns = line.Split(';');
+                        }
+                        else
+                        {
+                            if (csvSplit == null)
                                 csvSplit = new Regex(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)");
+                            columns = csvSplit.Split(line);
                         }
 
-                        var columns = csvSplit.Split(line);
                         for (int i = 0; i < columns.Length; i++)
                         {
                             columns[i] = columns[i].Trim('\"').Trim();
@@ -146,23 +166,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                                 model.CallGamma = ParseDouble(columns[colCallGamma]);
 
-                                int callOI;
-                                if (int.TryParse(columns[colCallOI].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out callOI))
-                                    model.CallOpenInterest = callOI;
-
-                                int callVol;
-                                if (colCallVol != -1 && colCallVol < columns.Length && int.TryParse(columns[colCallVol].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out callVol))
-                                    model.CallVolume = callVol;
+                                model.CallOpenInterest = ParseIntClean(columns[colCallOI]);
+                                if (colCallVol != -1 && colCallVol < columns.Length) model.CallVolume = ParseIntClean(columns[colCallVol]);
 
                                 model.PutGamma = ParseDouble(columns[colPutGamma]);
 
-                                int putOI;
-                                if (int.TryParse(columns[colPutOI].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putOI))
-                                    model.PutOpenInterest = putOI;
-
-                                int putVol;
-                                if (colPutVol != -1 && colPutVol < columns.Length && int.TryParse(columns[colPutVol].Replace(",", "").Replace(".", ""), NumberStyles.Any, CultureInfo.InvariantCulture, out putVol))
-                                    model.PutVolume = putVol;
+                                model.PutOpenInterest = ParseIntClean(columns[colPutOI]);
+                                if (colPutVol != -1 && colPutVol < columns.Length) model.PutVolume = ParseIntClean(columns[colPutVol]);
 
                                 // Fallback: si no tenemos UnderlyingPrice, usamos el Strike ATM (donde Gamma es máxima)
                                 if (result.UnderlyingPrice == 0 && (model.CallGamma > 0.05 || model.PutGamma > 0.05))
